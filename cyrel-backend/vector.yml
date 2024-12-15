@@ -1,0 +1,35 @@
+data_dir: vector/data
+
+sources:
+  in:
+    type: "file"
+    include:
+      - "/logs/*.log"
+
+transforms:
+  parse:
+    type: "remap"
+    inputs:
+      - "in"
+    source: '. |= parse_regex!(.message, r''\[(?P<ip>\d*.\d*.\d*.\d*)\S*\] \S* (?P<user>\S*) \[(?P<timestamp>\S* +\S*)\] "(?P<method>\S*) (?P<path>\S*) \S*" (?P<code>\d*) \S* "(?P<referer>[^"]*)" "(?P<agent>[^"]*)"'')'
+  fix_timestamp:
+    type: "remap"
+    inputs:
+      - "parse"
+    source: '.timestamp = parse_timestamp!(.timestamp, format: "%d/%b/%Y:%H:%M:%S %z")'
+  fix_host:
+    type: "remap"
+    inputs:
+      - "fix_timestamp"
+    source: '.host.name = .host'
+
+sinks:
+  out:
+    inputs:
+      - "fix_host"
+    type: "http"
+    encoding:
+      codec: json
+    framing:
+      method: newline_delimited
+    uri: http://quickwit:7280/api/v1/cyrel-logs/ingest

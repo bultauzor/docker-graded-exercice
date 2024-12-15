@@ -1,0 +1,135 @@
+diff --git a/src/main/kotlin/Main.kt b/src/main/kotlin/Main.kt
+index 060776d..3e42b9e 100644
+--- a/src/main/kotlin/Main.kt
++++ b/src/main/kotlin/Main.kt
+@@ -47,7 +47,7 @@ fun main() {
+
+         scheduler.scheduleJob(coursesJob, coursesTrigger)
+
+-        val studentsJob: JobDetail = newJob(UpdateCytechStudentsJob::class.java)
++        /*val studentsJob: JobDetail = newJob(UpdateCytechStudentsJob::class.java)
+             .withIdentity("update-students", "update-students")
+             .build()
+
+@@ -62,7 +62,7 @@ fun main() {
+             )
+             .build()
+
+-        scheduler.scheduleJob(studentsJob, studentsTrigger)
++        scheduler.scheduleJob(studentsJob, studentsTrigger)*/
+
+         val roomsJob: JobDetail = newJob(UpdateRoomsJob::class.java)
+             .withIdentity("update-rooms", "update-rooms")
+diff --git a/src/main/kotlin/UpdateCoursesJob.kt b/src/main/kotlin/UpdateCoursesJob.kt
+index 47a40b8..d677718 100644
+--- a/src/main/kotlin/UpdateCoursesJob.kt
++++ b/src/main/kotlin/UpdateCoursesJob.kt
+@@ -1,12 +1,14 @@
+-import fr.corpauration.cycelcat.CyCelcat
++import fr.corpauration.cycelcat.Data
+ import fr.corpauration.cycelcat.resources.Course
++import fr.corpauration.cycelcat.resources.SideBarEvent
+ import fr.corpauration.cycelcat.resources.SideBarEventElement
+-import fr.corpauration.cycelcat.resources.Student
+ import kotlinx.coroutines.runBlocking
++import kotlinx.serialization.json.Json
+ import org.quartz.Job
+ import org.quartz.JobExecutionContext
+ import org.slf4j.Logger
+ import org.slf4j.LoggerFactory
++import java.io.File
+ import java.sql.*
+ import java.time.DayOfWeek
+ import java.time.LocalDate
+@@ -29,11 +31,13 @@ class UpdateCoursesJob : Job {
+             props.setProperty("ssl", "false")
+             conn = DriverManager.getConnection(url, props)
+             LOG.info("Updating courses...")
+-            val celcat = CyCelcat()
++//            val celcat = CyCelcat()
+             runBlocking {
+-                celcat.login(System.getenv("CELCAT_USERNAME"), System.getenv("CELCAT_PASSWORD"))
++//                celcat.login(System.getenv("CELCAT_USERNAME"), System.getenv("CELCAT_PASSWORD"))
++                val file = File("/courses.json").readText(Charsets.UTF_8)
++                val data: List<Data> = Json.decodeFromString(file)
+                 getGroupReferents().map {
+-                    updateCourses(celcat, it.first, it.second)
++                    updateCourses(data, it.first, it.second)
+                 }
+             }
+             LOG.info("Done!")
+@@ -141,20 +145,12 @@ class UpdateCoursesJob : Job {
+         }
+     }
+
+-    suspend fun updateCourses(celcat: CyCelcat, group: Int, referent: Int) {
++    suspend fun updateCourses(data: List<Data>, group: Int, referent: Int) {
+         val timer = PrometheusStats.coursesGroupsDuration.startTimer()
+         LOG.info("Updating courses for group $group with referent id $referent")
+         try {
+             val now = LocalDate.now()
+-            val courses = celcat.getCalendarData(
+-                if (now.month.value in 9..12) now.withMonth(9).withDayOfMonth(1) else now.withMonth(9).withDayOfMonth(1)
+-                    .minusYears(1),
+-                if (now.month.value in 9..12) LocalDate.now().withMonth(9).withDayOfMonth(1)
+-                    .plusYears(1) else now.withMonth(9).withDayOfMonth(1),
+-                Student::class,
+-                "month",
+-                referent
+-            )
++            val courses = data
+
+             if (courses.isEmpty()) {
+                 LOG.error("Courses is empty, canceling update now for group $group with referent id $referent")
+@@ -165,9 +161,9 @@ class UpdateCoursesJob : Job {
+
+             conn.setAutoCommit(false)
+
+-            courses.map { updateEvent(celcat, it) }
++            courses.map { updateEvent(it.sideBarEvent, it.course) }
+
+-            getDifferences(group, courses)
++            getDifferences(group, courses.map { it.course })
+
+             val st1 = conn.prepareStatement("DELETE FROM courses_groups WHERE ref = ?")
+             st1.setInt(1, group)
+@@ -175,7 +171,7 @@ class UpdateCoursesJob : Job {
+
+             courses.map {
+                 val st2 = conn.prepareStatement("INSERT INTO courses_groups (id, ref) VALUES ( ?, ? )")
+-                st2.setString(1, it.id)
++                st2.setString(1, it.course.id)
+                 st2.setInt(2, group)
+                 st2.executeUpdate()
+             }
+@@ -195,8 +191,7 @@ class UpdateCoursesJob : Job {
+         timer.observeDuration()
+     }
+
+-    suspend fun updateEvent(celcat: CyCelcat, course: Course) {
+-        val event = celcat.getSideBarEvent(course.id)
++    suspend fun updateEvent(event: SideBarEvent, course: Course) {
+         val id: String = course.id
+         val start: LocalDateTime = LocalDateTime.parse(course.start)
+         val end: LocalDateTime? = if (course.end == null) null else LocalDateTime.parse(course.end)
+@@ -299,4 +294,4 @@ class UpdateCoursesJob : Job {
+         st.setInt(4, event.ordinal)
+         st.executeUpdate()
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/cy-celcat/src/main/kotlin/fr/corpauration/cycelcat/Data.kt b/cy-celcat/src/main/kotlin/fr/corpauration/cycelcat/Data.kt
+new file mode 100644
+index 0000000..41f2bfc
+--- /dev/null
++++ b/cy-celcat/src/main/kotlin/fr/corpauration/cycelcat/Data.kt
+@@ -0,0 +1,8 @@
++package fr.corpauration.cycelcat
++
++import fr.corpauration.cycelcat.resources.Course
++import fr.corpauration.cycelcat.resources.SideBarEvent
++import kotlinx.serialization.Serializable
++
++@Serializable
++data class Data(val course: Course, val sideBarEvent: SideBarEvent)

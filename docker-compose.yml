@@ -1,0 +1,265 @@
+# `version` key is obsolete and shouldn't be used https://docs.docker.com/reference/compose-file/version-and-name/
+
+services:
+  cyrel_database:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: dbuser
+      POSTGRES_PASSWORD: dbpassword
+      POSTGRES_DB: cyreldb
+    volumes:
+      - cyrel_backend_db:/var/lib/postgresql/data
+    networks:
+      - net_cyrel_db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d cyreldb -U dbuser"]
+      interval: 5s
+      timeout: 60s
+      retries: 10
+      start_period: 10s
+  cyrel_backend:
+    build: cyrel-backend
+    depends_on:
+      cyrel_database:
+        condition: service_healthy
+      keycloak_proxy:
+        condition: service_healthy
+      quickwit:
+        condition: service_healthy
+    environment:
+      DB_USERNAME: dbuser
+      DB_PASSWORD: dbpassword
+      DB_URL: postgresql://cyrel_database:5432/cyreldb
+      JDBC_URL: jdbc:postgresql://cyrel_database:5432/cyreldb
+      KEYCLOAK_URL: http://keycloak_proxy:8083/realms/cyrel
+      KEYCLOAK_SECRET: kWiQvBTCTeoDXrtomikipswfz4GbCBkJ
+      LOG_DIR: /logs
+    volumes:
+      - cyrel_logs:/logs
+    ports:
+      - 8081:8080
+    networks:
+      - net_cyrel_db
+      - net_uptime
+      - net_auth
+      - net_metrics
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/groups/ping"]
+      interval: 5s
+      timeout: 60s
+      retries: 10
+      start_period: 10s
+  cyrel_sync:
+    build: cyrel-sync
+    depends_on:
+      cyrel_database:
+        condition: service_healthy
+      cyrel_backend:
+        condition: service_healthy
+    environment:
+      DB_USERNAME: dbuser
+      DB_PASSWORD: dbpassword
+      JDBC_URL: jdbc:postgresql://cyrel_database:5432/cyreldb
+      CC_METRICS_PROMETHEUS_USER: user
+      CC_METRICS_PROMETHEUS_PASSWORD: password
+    ports:
+      - 8082:8080
+    networks:
+      - net_cyrel_db
+      - net_uptime
+      - net_metrics
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 5s
+      timeout: 60s
+      retries: 10
+      start_period: 10s
+  cyrel_front:
+    build: cyrel-front
+    depends_on:
+      cyrel_backend:
+        condition: service_healthy
+    scale: 3
+    networks:
+      - net_front
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 5s
+      timeout: 60s
+      retries: 10
+      start_period: 10s
+  reverse_proxy:
+    image: nginx:1.27-alpine
+    depends_on:
+      cyrel_front:
+        condition: service_healthy
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    ports:
+      - 8080:8080
+    networks:
+      - net_front
+      - net_uptime
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 5s
+      timeout: 60s
+      retries: 10
+      start_period: 10s
+  keycloak_database:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: dbuser
+      POSTGRES_PASSWORD: dbpassword
+      POSTGRES_DB: keycloak
+    volumes:
+      - keycloak_db:/var/lib/postgresql/data
+    networks:
+      - net_keycloak_db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d keycloak -U dbuser"]
+      interval: 5s
+      timeout: 60s
+      retries: 10
+      start_period: 10s
+  keycloak:
+    build: keycloak
+    command: start --import-realm --health-enabled=true
+    depends_on:
+      keycloak_database:
+        condition: service_healthy
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HOSTNAME_STRICT: false
+      KC_HTTP_ENABLED: true
+      KC_HOSTNAME: http://localhost:8083
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: true
+      KC_PROXY_ADDRESS_FORWARDING: true
+      KC_PROXY_HEADERS: xforwarded
+      KC_PROXY_TRUSTED_ADDRESSES: 172.22.0.0/24
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak_database/keycloak
+      KC_DB_USERNAME: dbuser
+      KC_DB_PASSWORD: dbpassword
+    networks:
+      - net_keycloak_db
+      - net_auth
+      - net_uptime
+    healthcheck:
+      test: ["CMD", "healthcheck"]
+      interval: 10s
+      timeout: 60s
+      retries: 100
+      start_period: 30s
+  keycloak_proxy:
+    image: nginx:1.27-alpine
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    volumes:
+      - ./keycloak/nginx.conf:/etc/nginx/nginx.conf
+    ports:
+      - 8083:8083
+    networks:
+      - net_auth
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8083/" ]
+      interval: 5s
+      timeout: 60s
+      retries: 10
+      start_period: 10s
+  uptime:
+    build: statping
+    environment:
+      DB_CONN: sqlite
+    volumes:
+      - statping:/app
+    ports:
+      - 3001:8080
+    networks:
+      - net_uptime
+      - net_metrics
+    healthcheck:
+          test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+          interval: 5s
+          timeout: 60s
+          retries: 10
+          start_period: 10s
+  quickwit:
+    build: quickwit
+    command:
+      - run
+    volumes:
+      - quickwit:/quickwit/qwdata
+    networks:
+      - net_metrics
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:7280/" ]
+      interval: 5s
+      timeout: 60s
+      retries: 10
+      start_period: 10s
+  prometheus:
+    image: bitnami/prometheus:3.0.1
+    volumes:
+      - ./prometheus.yml:/opt/bitnami/prometheus/conf/prometheus.yml
+      - prometheus:/opt/bitnami/prometheus/data
+    networks:
+      - net_metrics
+    depends_on:
+      cyrel_backend:
+        condition: service_healthy
+      cyrel_sync:
+        condition: service_healthy
+      uptime:
+        condition: service_healthy
+  grafana:
+    image: grafana/grafana:11.3.1
+    environment:
+      GF_INSTALL_PLUGINS: quickwit-quickwit-datasource
+    volumes:
+      - ./grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
+      - ./grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml
+      - ./grafana/dashboards.yaml:/usr/share/grafana/conf/provisioning/dashboards/dashboards.yaml
+      - ./grafana/dashboards:/usr/share/grafana/dashboards
+      - grafana:/var/lib/grafana
+    ports:
+      - 3000:3000
+    networks:
+      - net_metrics
+      - net_uptime
+    depends_on:
+      quickwit:
+        condition: service_started
+      prometheus:
+        condition: service_started
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/" ]
+      interval: 5s
+      timeout: 60s
+      retries: 10
+      start_period: 10s
+
+networks:
+  net_cyrel_db:
+    driver: bridge
+  net_front:
+    driver: bridge
+  net_keycloak_db:
+    driver: bridge
+  net_auth:
+    driver: bridge
+  net_uptime:
+    driver: bridge
+  net_metrics:
+    driver: bridge
+
+volumes:
+  cyrel_logs:
+  cyrel_backend_db:
+  keycloak_db:
+  quickwit:
+  prometheus:
+  grafana:
+  statping:
