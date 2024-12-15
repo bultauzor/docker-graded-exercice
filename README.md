@@ -35,7 +35,7 @@ cyrel-sync is the magic tool that fetches schedule from Celcat server.
 It is directly connected to the same database as Cyrel backend.
 It is written in Kotlin as well.
 
-**This component was slightly changed from the original version, see more in Docker part > Services.**
+**This component was slightly changed from the original version, see more in [Docker part > Services](#services).**
 
 ## Global architecture
 
