@@ -1,4 +1,4 @@
-# Docker graded exercice
+# Docker graded exercise
 
 The project dockerized is named Cyrel.
 
@@ -298,7 +298,7 @@ For other purposes, other solutions may need to be looked into.
 
 Running this exercise requires a set of conditions:
 
-- Have a 64-bit architecture
+- Have a not too old 64-bit architecture (at least x86-64-v2)
 - Have at least 4 GB of free memory
 - Have at least 9 GB of free storage
 - Have the following ports free:
